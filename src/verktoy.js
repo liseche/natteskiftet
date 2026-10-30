@@ -43,6 +43,40 @@ function sokILogger({ tjeneste, niva, fra, til, tekst, maks = 50 } = {}) {
   return linjer.join('\n');
 }
 
+// Sjekker mot tjenester.json, så en skrivefeil gir en feilmelding og ikke ser ut som «ingen treff».
+function sjekkTjeneste(tjeneste) {
+  const kjente = lesJson('tjenester.json').map((t) => t.navn);
+  if (tjeneste && !kjente.includes(tjeneste)) throw new Error(`Ukjent tjeneste «${tjeneste}». Gyldige: ${kjente.join(', ')}`);
+}
+
+function hentRunbook({ tjeneste } = {}) {
+  const mappe = path.join(DATA, 'runbooks');
+  const finnes = fs.readdirSync(mappe).filter((f) => f.endsWith('.md')).map((f) => path.basename(f, '.md'));
+  // Slår opp i lista i stedet for å bygge stien rett fra input, så «../noe» ikke når filer utenfor mappa.
+  if (!finnes.includes(tjeneste)) throw new Error(`Ingen runbook for «${tjeneste}». Finnes for: ${finnes.join(', ')}`);
+  return fs.readFileSync(path.join(mappe, `${tjeneste}.md`), 'utf8');
+}
+
+function sjekkDeployHistorikk({ tjeneste, siden } = {}) {
+  sjekkTjeneste(tjeneste);
+  const sidenMs = siden ? tilMs(siden) : -Infinity;
+  const endringer = lesJson('deploy-historikk.json')
+    .filter((e) => (!tjeneste || e.tjeneste === tjeneste) && Date.parse(e.tid) >= sidenMs)
+    .sort((a, b) => Date.parse(b.tid) - Date.parse(a.tid));
+  if (endringer.length === 0) return 'Ingen endringer matchet filteret. Utelat tjeneste eller siden for å se alt.';
+  return endringer;
+}
+
+function finnLignendeHendelser({ tjeneste, tekst } = {}) {
+  sjekkTjeneste(tjeneste);
+  const ord = tekst?.toLowerCase();
+  const treff = lesJson('hendelser.json').filter((h) =>
+    (!tjeneste || h.tjeneste === tjeneste) &&
+    (!ord || [h.tittel, h.sammendrag, h.rotårsak].some((felt) => felt.toLowerCase().includes(ord))));
+  if (treff.length === 0) return 'Ingen tidligere hendelser matchet. Prøv et annet søkeord eller utelat tjeneste.';
+  return treff;
+}
+
 export const verktøy = [
   {
     definisjon: {
@@ -78,9 +112,7 @@ export const verktøy = [
         required: ['tjeneste'],
       },
     },
-    // TODO: les data/runbooks/<tjeneste>.md med fs.readFileSync. Finnes ikke fila,
-    // kast en Error med lista over runbooks som finnes (fs.readdirSync).
-    kjør: null,
+    kjør: async (input) => hentRunbook(input),
   },
   {
     definisjon: {
@@ -96,9 +128,7 @@ export const verktøy = [
         },
       },
     },
-    // TODO: lesJson('deploy-historikk.json'), filtrer på tjeneste og siden
-    // (Date.parse), sorter nyest først.
-    kjør: null,
+    kjør: async (input) => sjekkDeployHistorikk(input),
   },
   {
     definisjon: {
@@ -114,8 +144,6 @@ export const verktøy = [
         },
       },
     },
-    // TODO: lesJson('hendelser.json') og filtrer på tjeneste og/eller om tekst finnes
-    // i tittel, sammendrag eller rotårsak. Enkel tekstmatch holder lenge.
-    kjør: null,
+    kjør: async (input) => finnLignendeHendelser(input),
   },
 ];
